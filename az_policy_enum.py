@@ -205,9 +205,8 @@ def enum_custom_definitions_and_initiatives(sub_map=None):
                 pd_guid = pd_id.split("/")[-1] if pd_id else "unknown"
                 pd_name = resolve_policy_name(pd_guid)
                 # Prefer explicit effect override in initiative, fall back to definition's own effect
-                effect_override = (pd.get("parameters", {})
-                                     .get("effect", {})
-                                     .get("value", ""))
+                params = pd.get("parameters") or {}
+                effect_override = (params.get("effect") or {}).get("value", "")
                 effect = effect_override if effect_override else resolve_policy_effect(pd_guid)
                 info(f"  - {pd_name} (effect: {effect})")
                 resolved_policies.append(f"{pd_name} (effect: {effect})")
