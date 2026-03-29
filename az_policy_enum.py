@@ -43,11 +43,11 @@ def info(text):
     print(f"    {CYAN}[-]{RESET} {text}")
 
 # ── az CLI helpers ────────────────────────────────────────────────────────────
-def az(args, ignore_errors=False):
+def az(args, ignore_errors=False, timeout=30):
     """Run an az CLI command, return parsed JSON or None on failure."""
     cmd = ["az"] + args + ["--output", "json"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             if not ignore_errors:
                 warn(f"Command failed: az {' '.join(args)}")
@@ -218,7 +218,7 @@ def enum_custom_definitions_and_initiatives(sub_map=None):
 
 def enum_exemptions(scope, scope_label):
     section(f"Exemptions @ {scope_label}")
-    exemptions = az(["policy", "exemption", "list", "--scope", scope], ignore_errors=True)
+    exemptions = az(["policy", "exemption", "list", "--scope", scope], ignore_errors=True, timeout=60)
     if not exemptions:
         info("No exemptions found")
         return
@@ -240,25 +240,26 @@ def enum_dine_blast_radius(dine_identities):
     if not dine_identities:
         return
     banner("DINE MSI Blast Radius")
+    subs = az(["account", "list", "--query", "[].id"], ignore_errors=True) or []
     for d in dine_identities:
         section(f"MSI: {d['name']} ({d['principalId']})")
-        # az CLI --assignee flag is unreliable for MSIs - use az rest at tenant scope
-        result = az_rest(
-            f"https://management.azure.com/providers/Microsoft.Authorization/roleAssignments"
-            f"?api-version=2022-04-01&$filter=principalId eq '{d['principalId']}'"
-        )
-        if result is None:
-            warn("Could not query role assignments - insufficient permissions")
-            continue
-        if not result.get("value"):
+        found_any = False
+        # Query per subscription scope — tenant scope requires elevated permissions
+        for sub_id in subs:
+            result = az_rest(
+                f"https://management.azure.com/subscriptions/{sub_id}/providers/Microsoft.Authorization"
+                f"/roleAssignments?api-version=2022-04-01&$filter=principalId eq '{d['principalId']}'"
+            )
+            if result and result.get("value"):
+                for r in result["value"]:
+                    props = r.get("properties", {})
+                    role_def_id = props.get("roleDefinitionId", "")
+                    scope = props.get("scope", "unknown")
+                    role_name = resolve_role_name(role_def_id) if role_def_id else "unknown"
+                    finding(f"{role_name} @ {scope}", "high")
+                    found_any = True
+        if not found_any:
             finding("MSI exists but has no role assignments - DINE remediation inoperative; identity could be granted roles by attacker", "high")
-            continue
-        for r in result["value"]:
-            props = r.get("properties", {})
-            role_def_id = props.get("roleDefinitionId", "")
-            scope = props.get("scope", "unknown")
-            role_name = resolve_role_name(role_def_id) if role_def_id else "unknown"
-            finding(f"{role_name} @ {scope}", "high")
 
 def friendly_resource(resource_id):
     """Return a readable resource label from a full resource ID."""
